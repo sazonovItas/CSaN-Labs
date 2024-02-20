@@ -1,19 +1,22 @@
 package main
 
 import (
-	"bytes"
+	_ "bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/fatih/color"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+
+	oui "github.com/sazonovItas/arp-scanner/internal"
 )
 
 var (
@@ -89,6 +92,8 @@ func scan(iface *net.Interface, ipsToCheck []net.IP) error {
 		return errors.New("mask too large")
 	}
 
+	fmt.Printf("IP - %s  HWAddress - %s\n", addr.IP, iface.HardwareAddr.String())
+
 	handle, err := pcap.OpenLive(iface.Name, 65536, true, pcap.BlockForever)
 	if err != nil {
 		return err
@@ -159,18 +164,37 @@ func readARP(handle *pcap.Handle, iface *net.Interface, stop chan struct{}) {
 				continue
 			}
 
+			// ||	bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress)
 			arp := arpLayer.(*layers.ARP)
-			if arp.Operation != layers.ARPReply ||
-				bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress) {
+			if arp.Operation != layers.ARPReply {
 				continue
 			}
 
 			if _, ok := cache[net.IP(arp.SourceProtAddress).String()]; !ok {
 				fmt.Printf(
-					"\t%s ---> %s\n",
+					"\t%15s ---> %s  ",
 					net.IP(arp.SourceProtAddress),
 					net.HardwareAddr(arp.SourceHwAddress),
 				)
+
+				if arp.SourceHwAddress[0]&0x2 == 1 {
+					fmt.Printf("local administraited ")
+				} else {
+					strs := strings.Split(
+						strings.ToUpper(net.HardwareAddr(arp.SourceHwAddress).String()),
+						":",
+					)
+					if name, ok := oui.OUIs[strs[0]+":"+strs[1]+":"+strs[2]]; ok {
+						fmt.Printf("%s   %s  ", name.Manufacturer, name.FullName)
+					}
+				}
+
+				addr, err := net.LookupAddr(net.IP(arp.SourceProtAddress).String())
+				if err == nil {
+					fmt.Printf("%s", addr)
+				}
+				fmt.Printf("\n")
+
 				cache[net.IP(arp.SourceProtAddress).String()] = net.HardwareAddr(arp.SourceHwAddress).
 					String()
 			}
